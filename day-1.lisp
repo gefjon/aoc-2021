@@ -1,5 +1,6 @@
 (uiop:define-package :aoc-2021/day-1
-  (:use :aoc-2021/prelude))
+  (:use :aoc-2021/prelude)
+  (:export #:part1 #:part2 #:file-line-ints))
 (cl:in-package :aoc-2021/day-1)
 
 (coalton-toplevel

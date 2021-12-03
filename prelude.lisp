@@ -1,16 +1,20 @@
 (uiop:define-package :aoc-2021/prelude
   (:use-reexport :coalton :coalton-library)
-  (:import-from :alexandria #:if-let)
   (:export
 
-   #:Iterator #:next #:reduce #:reduce2 #:empty-iterator
+   #:if-let #:letrec #:format
+
+   #:Iterator #:next #:reduce #:reduce2 #:empty-iterator #:iterator-for-each #:range #:upto #:iterator-sum
 
    #:InputFile #:open-read #:close-read #:read-line #:lines
    #:call-with-input-file #:with-input-file
 
    #:flatten #:unwrap #:expect #:debug
 
-   #:strlen #:substring #:leading-substring? #:without-leading-substring))
+   #:strlen #:substring #:leading-substring? #:without-leading-substring
+   #:parse-int-with-base
+   #:bitfield-extract #:bitfield-insert #:bit-set? #:plus? #:minus? #:sign #:bitwise-invert
+   #:vector-apply-at #:vector-iterator #:collect-to-vector))
 (cl:in-package :aoc-2021/prelude)
 
 (cl:defun nullable-to-optional (thing)
@@ -18,7 +22,22 @@
          (Some thing)
          None))
 
-(coalton-toplevel 
+(cl:defmacro if-let ((pat term) cl:&body (then else))
+  `(match ,term
+     (,pat ,then)
+     (_ ,else)))
+
+(cl:defmacro letrec (((name cl:&rest args) cl:&body (fnbody)) cl:&body (in))
+  `(let ((,name (fix (fn (,name ,@args) ,fnbody))))
+     ,in))
+
+(cl:defmacro format (template cl:&rest vars)
+  `(lisp Unit ,vars
+     (cl:progn
+       (cl:format cl:t ,template ,@vars)
+       Unit)))
+
+(coalton-toplevel
   (define-type (Iterator :item)
     (Iterator (Unit -> (Optional :item))))
 
@@ -34,19 +53,61 @@
          (Iterator (fn (u)
                      (map func (i u))))))))
 
-  (declare empty-iterator (Iterator :a))
-  (define empty-iterator (Iterator (fn (unit) None))))
+  (declare iterator-sum ((Num :a) => ((Iterator :a) -> :a)))
+  (define iterator-sum (reduce + (fromInt 0)))
 
-(coalton-toplevel 
+  (declare empty-iterator (Iterator :a))
+  (define empty-iterator (Iterator (fn (_) None)))
+
+  (declare range (Integer -> Integer -> (Iterator Integer)))
+  (define (range start end)
+    (let ((step (if (> start end) -1 1))
+          (finished? (if (> start end) <= >=))
+          (state (make-cell start)))
+      (Iterator
+       (fn (_) (let ((old (cell-read state)))
+                 (if (finished? old end)
+                     None
+                     (Some (cell-swap (+ step old) state))))))))
+
+  (declare upto (Integer -> (Iterator Integer)))
+  (define (upto end)
+    (range 0 end))
+
+  (declare filter ((:a -> Boolean) -> (Iterator :a) -> (Iterator :a)))
+  (define (filter keep? iter)
+    (letrec ((filter-iter u)
+             (if-let ((Some item) (next iter))
+               (if (keep? item)
+                   (Some item)
+                   (filter-iter u))
+               None))
+      (Iterator filter-iter))))
+
+(coalton-toplevel
   (declare reduce ((:state -> :item -> :state) -> :state -> (Iterator :item) -> :state))
   (define (reduce func init iter)
     (match (next iter)
       ((Some item) (reduce func
                            (func init item)
                            iter))
-      ((None) init))))
+      ((None) init)))
 
-(coalton-toplevel 
+  (declare constantly (:a -> :b -> :a))
+  (define (constantly a _) a)
+
+  (declare iterator-for-each ((:item -> :a) -> (Iterator :item) -> Unit))
+  (define (iterator-for-each func iter)
+    (reduce (fn (_) (compose (constantly Unit) func)) Unit iter))
+
+  (declare zip ((Iterator :a) -> (Iterator :b) -> (Iterator (Tuple :a :b))))
+  (define (zip left right)
+    (Iterator (fn (_)
+                (if-let ((Tuple (Some l) (Some r)) (Tuple (next left) (next right)))
+                  (Some (Tuple l r))
+                  None)))))
+
+(coalton-toplevel
   (define-type InputFile
     (InputFile Lisp-Object))
 
@@ -82,8 +143,8 @@
                None))))
 
   (declare lines (InputFile -> (Iterator String)))
-  (define (lines f) (Iterator (fn (unit) (read-line f))))
-  
+  (define (lines f) (Iterator (fn (_) (read-line f))))
+
   (declare flatten ((Optional (Optional :a)) -> (Optional :a)))
   (define (flatten x)
     (match x
@@ -106,7 +167,7 @@
 (coalton-toplevel
   (declare debug (String -> :a -> :a))
   (define (debug msg a)
-    (progn 
+    (progn
       (traceObject msg a)
       a)))
 
@@ -119,11 +180,11 @@
   (define (strlen str)
     (lisp Integer (str)
       (cl:length str)))
-  
+
   (declare substring (String -> Integer -> Integer -> String))
   (define (substring str start end)
     (lisp String (str start end)
-      (cl:progn 
+      (cl:progn
         (cl:assert (cl:>= end start))
         (cl:let ((real-end (cl:min end (strlen str))))
           ;; i have a PR out https://github.com/coalton-lang/coalton/pull/229 to include displaced strings in
@@ -142,4 +203,64 @@
   (define (without-leading-substring small big)
     (if (leading-substring? small big)
         (Some (substring big (strlen small) (strlen big)))
-        None)))
+        None))
+
+  (declare parse-int-with-base (Integer -> String -> (Optional Integer)))
+  (define (parse-int-with-base base input)
+    (lisp (Optional Integer) (base input)
+      (nullable-to-optional (cl:parse-integer input
+                                              :junk-allowed cl:t
+                                              :radix base)))))
+
+(coalton-toplevel
+  (declare bitfield-extract (Integer -> Integer -> Integer -> Integer))
+  (define (bitfield-extract size start int)
+    (lisp Integer (start size int)
+      (cl:ldb (cl:byte size start) int)))
+
+  (declare bitfield-insert (Integer -> Integer -> Integer -> Integer -> Integer))
+  (define (bitfield-insert size start new int)
+    (lisp Integer (start size new int)
+      (cl:dpb new (cl:byte size start) int)))
+
+  (declare bit-set? (Integer -> Integer -> Boolean))
+  (define (bit-set? index int)
+    (== 1 (bitfield-extract 1 index int)))
+
+  (declare plus? (Integer -> Boolean))
+  (define (plus? int)
+    (> int 0))
+  (declare minus? (Integer -> Boolean))
+  (define (minus? int)
+    (< int 0))
+
+  (declare sign (Integer -> Integer))
+  (define (sign int)
+    (lisp Integer (int)
+      (cl:signum int)))
+
+  (declare bitwise-invert (Integer -> Integer))
+  (define (bitwise-invert int)
+    (lisp Integer (int)
+      (cl:lognot int))))
+
+(coalton-toplevel
+  (declare vector-apply-at ((:a -> :a) -> Integer -> (Vector :a) -> (Vector :a)))
+  (define (vector-apply-at func index vector)
+    "It's a destructive operator, but it still returns the vector for purposes of `reduce'-ing"
+    (if-let ((Some old) (vector-index index vector))
+      (progn (vector-set index (func old) vector) vector)
+      (error "OOB index in vector-apply-at")))
+
+  (declare vector-iterator ((Vector :a) -> (Iterator :a)))
+  (define (vector-iterator vec)
+    (map (fn (idx) (vector-index-unsafe idx vec))
+         (upto (vector-length vec))))
+
+  (declare collect-to-vector ((Iterator :a) -> (Vector :a)))
+  (define (collect-to-vector iter)
+    (progn
+      (let vec = (make-vector Unit))
+      (iterator-for-each (fn (item) (vector-push item vec))
+                         iter)
+      vec)))
