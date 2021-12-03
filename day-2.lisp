@@ -63,7 +63,7 @@
   (define-type SubLoc2
     ;; aim, depth, horiz
     (SubLoc2 Integer Integer Integer))
-  
+
   (declare update-subloc-2 (SubLoc2 -> Insn -> SubLoc2))
   (define (update-subloc-2 loc ins)
     (match loc
@@ -74,7 +74,7 @@
                                  (+ horiz amt)))
          ((Up amt) (SubLoc2 (- aim amt) depth horiz))
          ((Down amt) (SubLoc2 (+ aim amt) depth horiz))))))
-  
+
   (declare follow2 ((Iterator Insn) -> SubLoc2))
   (define (follow2 iter)
     (reduce update-subloc-2 (SubLoc2 0 0 0) iter))
@@ -84,4 +84,4 @@
     (expect "Failed to open file"
             (with-input-file (f path)
               (match (follow2 (file-insns f))
-                ((SubLoc2 aim depth horiz) (* depth horiz)))))))
+                ((SubLoc2 _ depth horiz) (* depth horiz)))))))

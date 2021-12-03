@@ -125,9 +125,14 @@
     (lisp String (str start end)
       (cl:progn 
         (cl:assert (cl:>= end start))
-        ;; inefficient copy, because coalton treats String as `cl:simple-string' instead of `cl:string', so i
-        ;; can't do a displaced-array. :/
-        (cl:subseq str start (cl:min end (strlen str))))))
+        (cl:let ((real-end (cl:min end (strlen str))))
+          ;; i have a PR out https://github.com/coalton-lang/coalton/pull/229 to include displaced strings in
+          ;; the type `String'. until it gets merged, the following will not build on
+          ;; `coalton-lang/coalton/main'. use https://github.com/gefjon/coalton/tree/displaced-string instead.
+          (cl:make-array (cl:- real-end start)
+                         :displaced-to str
+                         :displaced-index-offset start
+                         :element-type (cl:array-element-type str))))))
 
   (declare leading-substring? (String -> String -> Boolean))
   (define (leading-substring? small big)
