@@ -14,7 +14,7 @@
   (define (make-counter-vec _)
     (let ((vec (make-vector-capacity bits-per-entry)))
       (progn
-        (iterator-for-each (fn (_) (vector-push 0 vec))
+        (for-each (fn (_) (vector-push 0 vec))
                            (upto bits-per-entry))
         vec)))
 
@@ -90,21 +90,20 @@
                               -> (Vector Integer)
                               -> Integer))
   (define (entries-parameter counter-desired-bit entries)
-    ;; FIXME: handle case with zero in counter
-    (letrec ((inner remaining-entries bit-to-consider)
-             (match (vector-length remaining-entries)
-               (0 (error "no matching parameter found!"))
-               (1 (vector-index-unsafe 0 remaining-entries))
-               (_ (progn
-                    (when (minus? bit-to-consider)
-                      (error "too many remaining candidates!"))
-                    (let counter = (entries-count-bit bit-to-consider remaining-entries))
-                    (let counter-bit = (counter-desired-bit counter))
-                    (let keep? = (fn (candidate)
-                                   (== counter-bit (bit-set? bit-to-consider candidate))))
-                    (let remaining = (collect-to-vector (filter keep?
-                                                                (vector-iterator remaining-entries))))
-                    (inner remaining (- bit-to-consider 1))))))
+    (let ((inner (fn (remaining-entries bit-to-consider)
+                   (match (vector-length remaining-entries)
+                     (0 (error "no matching parameter found!"))
+                     (1 (vector-index-unsafe 0 remaining-entries))
+                     (_ (progn
+                          (when (minus? bit-to-consider)
+                            (error "too many remaining candidates!"))
+                          (let counter = (entries-count-bit bit-to-consider remaining-entries))
+                          (let counter-bit = (counter-desired-bit counter))
+                          (let keep? = (fn (candidate)
+                                         (== counter-bit (bit-set? bit-to-consider candidate))))
+                          (let remaining = (collect-to-vector (filter keep?
+                                                                      (vector-iterator remaining-entries))))
+                          (inner remaining (- bit-to-consider 1))))))))
       (inner entries (- bits-per-entry 1))))
 
   (declare entries-oxygen ((Vector Integer) -> Integer))

@@ -2,19 +2,21 @@
   (:use-reexport :coalton :coalton-library)
   (:export
 
-   #:if-let #:letrec #:format
+   #:if-let #:format
 
-   #:Iterator #:next #:reduce #:reduce2 #:empty-iterator #:iterator-for-each #:range #:upto #:iterator-sum
+   #:Iterator #:next #:reduce #:unwrapped #:empty-iterator #:for-each #:range #:upto #:iterator-sum #:every? #:any?
 
-   #:InputFile #:open-read #:close-read #:read-line #:lines
+   #:InputFile #:open-read #:close-read #:read-line #:lines #:eof?
    #:call-with-input-file #:with-input-file
 
    #:flatten #:unwrap #:expect #:debug
 
-   #:strlen #:substring #:leading-substring? #:without-leading-substring
+   #:strlen #:string-empty? #:substring #:leading-substring? #:without-leading-substring #:split-string
    #:parse-int-with-base
    #:bitfield-extract #:bitfield-insert #:bit-set? #:plus? #:minus? #:sign #:bitwise-invert
-   #:vector-apply-at #:vector-iterator #:collect-to-vector))
+   #:vector-apply-at #:vector-iterator #:collect-to-vector
+   #:Matrix #:make-matrix #:matrix-index-unsafe #:matrix-index #:matrix-write!-unsafe #:matrix-row-iterator #:matrix-col-iterator
+   #:call/ec #:EscapeContinuation #:throw #:let/ec))
 (cl:in-package :aoc-2021/prelude)
 
 (cl:defun nullable-to-optional (thing)
@@ -27,35 +29,73 @@
      (,pat ,then)
      (_ ,else)))
 
-(cl:defmacro letrec (((name cl:&rest args) cl:&body (fnbody)) cl:&body (in))
-  `(let ((,name (fix (fn (,name ,@args) ,fnbody))))
-     ,in))
+(cl:defmacro matches? (pat term)
+  `(match ,term
+     (,pat True)
+     (_ False)))
 
 (cl:defmacro format (template cl:&rest vars)
+  (cl:assert (cl:typep template 'cl:string) ()
+             "format template must be a string literal")
+  (cl:dolist (var vars)
+    (cl:assert (cl:typep var 'cl:symbol) ()
+               "format arguments must be bare variables, not exprs"))
   `(lisp Unit ,vars
      (cl:progn
        (cl:format cl:t ,template ,@vars)
        Unit)))
 
+;;;; iterator
+;;; type definition
 (coalton-toplevel
   (define-type (Iterator :item)
-    (Iterator (Unit -> (Optional :item))))
+    (Iterator (Unit -> (Optional :item)))))
 
+;;; operators
+(coalton-toplevel
   (declare next ((Iterator :item) -> (Optional :item)))
   (define (next i)
     (match i
       ((Iterator func) (func Unit))))
 
+  (declare zip ((Iterator :a) -> (Iterator :b) -> (Iterator (Tuple :a :b))))
+  (define (zip left right)
+    (Iterator (fn (_)
+                (if-let ((Tuple (Some l) (Some r)) (Tuple (next left) (next right)))
+                  (Some (Tuple l r))
+                  None))))
+
+  (declare filter ((:a -> Boolean) -> (Iterator :a) -> (Iterator :a)))
+  (define (filter keep? iter)
+    (let ((filter-iter (fn  (u)
+                         (if-let ((Some item) (next iter))
+                           (if (keep? item)
+                               (Some item)
+                             (filter-iter u))
+                         None))))
+      (Iterator filter-iter)))
+
+  (declare unwrapped ((Iterator (Optional :a)) -> (Iterator :a)))
+  (define (unwrapped iter)
+    (let ((unwrapped-iterator
+            (fn (u)
+              (match (next iter)
+                ((None) None)
+                ((Some (Some item)) (Some item))
+                ((Some (None)) (unwrapped-iterator u))))))
+      (Iterator unwrapped-iterator))))
+
+;;; instances
+(coalton-toplevel
   (define-instance (Functor Iterator)
     (define (map func iter)
       (match iter
         ((Iterator i)
          (Iterator (fn (u)
-                     (map func (i u))))))))
+                     (map func (i u)))))))))
 
-  (declare iterator-sum ((Num :a) => ((Iterator :a) -> :a)))
-  (define iterator-sum (reduce + (fromInt 0)))
-
+;;; constructors
+(coalton-toplevel
   (declare empty-iterator (Iterator :a))
   (define empty-iterator (Iterator (fn (_) None)))
 
@@ -74,16 +114,17 @@
   (define (upto end)
     (range 0 end))
 
-  (declare filter ((:a -> Boolean) -> (Iterator :a) -> (Iterator :a)))
-  (define (filter keep? iter)
-    (letrec ((filter-iter u)
-             (if-let ((Some item) (next iter))
-               (if (keep? item)
-                   (Some item)
-                   (filter-iter u))
-               None))
-      (Iterator filter-iter))))
+  (declare cl-list-iterator-unsafe (Lisp-Object -> (Iterator :a)))
+  (define (cl-list-iterator-unsafe lst)
+    (let ((cell (make-cell lst)))
+      (Iterator (fn (_)
+                  (lisp (Optional :a) (cell)
+                    (alexandria:if-let (head (cell-read cell))
+                      (Some (cl:progn (cell-write (cl:rest head) cell)
+                                      (cl:first head)))
+                      None)))))))
 
+;;; consumers
 (coalton-toplevel
   (declare reduce ((:state -> :item -> :state) -> :state -> (Iterator :item) -> :state))
   (define (reduce func init iter)
@@ -93,19 +134,21 @@
                            iter))
       ((None) init)))
 
-  (declare constantly (:a -> :b -> :a))
-  (define (constantly a _) a)
+  (declare iterator-sum ((Num :a) => ((Iterator :a) -> :a)))
+  (define iterator-sum (reduce + (fromInt 0)))
 
-  (declare iterator-for-each ((:item -> :a) -> (Iterator :item) -> Unit))
-  (define (iterator-for-each func iter)
-    (reduce (fn (_) (compose (constantly Unit) func)) Unit iter))
+  (declare for-each ((:item -> :a) -> (Iterator :item) -> Unit))
+  (define (for-each func iter)
+    (reduce (fn (_) (compose (const Unit) func)) Unit iter))
 
-  (declare zip ((Iterator :a) -> (Iterator :b) -> (Iterator (Tuple :a :b))))
-  (define (zip left right)
-    (Iterator (fn (_)
-                (if-let ((Tuple (Some l) (Some r)) (Tuple (next left) (next right)))
-                  (Some (Tuple l r))
-                  None)))))
+  (declare every? ((:item -> Boolean) -> (Iterator :item) -> Boolean))
+  (define (every? pred iter)
+    (match (next iter)
+      ((None) True)
+      ((Some item) (and (pred item) (every? pred iter)))))
+
+  (define (any? pred iter)
+    (not (every? (compose not pred) iter))))
 
 (coalton-toplevel
   (define-type InputFile
@@ -113,10 +156,11 @@
 
   (declare open-read (String -> (Optional InputFile)))
   (define (open-read path)
-    (lisp (Optional InputFile) (path)
-      (nullable-to-optional (cl:open path :direction :input
-                                          :element-type 'cl:character
-                                          :if-does-not-exist cl:nil))))
+    (map InputFile 
+         (lisp (Optional Lisp-Object) (path)
+           (nullable-to-optional (cl:open path :direction :input
+                                               :element-type 'cl:character
+                                               :if-does-not-exist cl:nil)))))
 
   (declare read-line (InputFile -> (Optional String)))
   (define (read-line file)
@@ -124,6 +168,16 @@
       ((InputFile f)
        (lisp (Optional String) (f)
          (nullable-to-optional (cl:read-line f cl:nil cl:nil))))))
+
+  (declare eof? (InputFile -> Boolean))
+  (define (eof? f)
+    (match f
+      ((InputFile stream)
+       (lisp Boolean (stream)
+         (alexandria:if-let (ch (cl:read-char stream cl:nil cl:nil))
+           (cl:progn (cl:unread-char ch stream)
+                     False)
+           True)))))
 
   (declare close-read (InputFile -> Unit))
   (define (close-read file)
@@ -181,6 +235,9 @@
     (lisp Integer (str)
       (cl:length str)))
 
+  (declare string-empty? (String -> Boolean))
+  (define (string-empty? str) (== (strlen str) 0))
+
   (declare substring (String -> Integer -> Integer -> String))
   (define (substring str start end)
     (lisp String (str start end)
@@ -210,7 +267,14 @@
     (lisp (Optional Integer) (base input)
       (nullable-to-optional (cl:parse-integer input
                                               :junk-allowed cl:t
-                                              :radix base)))))
+                                              :radix base))))
+
+  (declare split-string (Char -> String -> (Iterator String)))
+  (define (split-string delim str)
+    ;; args in this order to support currying
+    (lisp (Iterator String) (delim str)
+      (cl-list-iterator-unsafe
+       (split-sequence:split-sequence delim str)))))
 
 (coalton-toplevel
   (declare bitfield-extract (Integer -> Integer -> Integer -> Integer))
@@ -261,6 +325,93 @@
   (define (collect-to-vector iter)
     (progn
       (let vec = (make-vector Unit))
-      (iterator-for-each (fn (item) (vector-push item vec))
+      (for-each (fn (item) (vector-push item vec))
                          iter)
       vec)))
+
+(coalton-toplevel
+  (define-type (Matrix :a)
+    (Matrix Lisp-Object))
+
+  (declare matrix-rows ((Matrix :a) -> Integer))
+  (define (matrix-rows mat)
+    (match mat
+      ((Matrix arr) (lisp Integer (arr)
+                      (cl:array-dimension arr 0)))))
+
+  (declare matrix-columns ((Matrix :a) -> Integer))
+  (define (matrix-columns mat)
+    (match mat
+      ((Matrix arr) (lisp Integer (arr)
+                      (cl:array-dimension arr 1)))))
+  
+  (declare make-matrix (Integer -> Integer -> :a -> (Matrix :a)))
+  (define (make-matrix rows cols initial-element)
+    (Matrix (lisp Lisp-Object (rows cols initial-element)
+              (cl:make-array (cl:list rows cols)
+                             :initial-element initial-element))))
+  
+  (declare matrix-index-unsafe ((Matrix :a) -> Integer -> Integer -> :a))
+  (define (matrix-index-unsafe mat row col)
+    (match mat
+      ((Matrix arr) (lisp :a (arr row col)
+                      (cl:aref arr row col)))))
+
+  (declare matrix-row-inbounds ((Matrix :a) -> Integer -> Boolean))
+  (define (matrix-row-inbounds mat row)
+    (and (>= row 0) (< row (matrix-rows mat))))
+
+  (declare matrix-col-inbounds ((Matrix :a) -> Integer -> boolean))
+  (define (matrix-col-inbounds mat col)
+    (and (>= col 0) (< col (matrix-columns mat))))
+  
+  (declare matrix-index ((Matrix :a) -> Integer -> Integer -> (Optional :a)))
+  (define (matrix-index mat row col)
+    (if (and (matrix-row-inbounds mat row)
+             (matrix-col-inbounds mat col))
+        (Some (matrix-index-unsafe mat row col))
+        None))
+
+  (declare matrix-write!-unsafe ((Matrix :a) -> :a -> Integer -> Integer -> (Matrix :a)))
+  (define (matrix-write!-unsafe mat new-val row col)
+    "a destructive operator, but it returns the matrix so you can reduce"
+    (progn (match mat
+             ((Matrix arr) (lisp :a (arr new-val row col)
+                             (cl:setf (cl:aref arr row col) new-val))))
+           mat))
+
+  (declare matrix-row-iterator ((Matrix :a) -> Integer -> (Iterator :a)))
+  (define (matrix-row-iterator mat row)
+    (progn (unless (matrix-row-inbounds mat row)
+             (error "oob row in matrix-row-iterator"))
+           (map (matrix-index-unsafe mat row)
+                (upto (matrix-columns mat)))))
+
+  (declare matrix-col-iterator ((Matrix :a) -> Integer -> (Iterator :a)))
+  (define (matrix-col-iterator mat col)
+    (progn (unless (matrix-col-inbounds mat col)
+             (error "oob col in matrix-col-iterator"))
+           (map ((flip (matrix-index-unsafe mat)) col)
+                (upto (matrix-rows mat))))))
+
+(coalton-toplevel
+  (define-type (EscapeContinuation :res)
+    (EscapeContinuation Lisp-Object))
+
+  (declare throw ((EscapeContinuation :res) -> :res -> :any))
+  (define (throw ec res)
+    (match ec
+      ((EscapeContinuation escape)
+       (lisp :any (escape res)
+         (cl:funcall escape res)))))
+  
+  (declare call/ec (((EscapeContinuation :res) -> :res) -> :res))
+  (define (call/ec thunk)
+    (lisp :res (thunk)
+      (cl:block cl:nil
+        (cl:flet ((ec (res)
+                    (cl:return res)))
+          (cl:funcall thunk (EscapeContinuation #'ec)))))))
+
+(cl:defmacro let/ec (ec cl:&body (body))
+  `(call/ec (fn (,ec) ,body)))
