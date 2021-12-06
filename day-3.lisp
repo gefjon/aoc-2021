@@ -28,8 +28,8 @@
   (define (update-counters-for-entry counters int)
     (reduce (fn (counters bit)
               (vector-apply-at (+ (bit-counter-delta bit int))
-                                                  bit
-                                                  counters))
+                               counters
+                               bit))
             counters
             (upto bits-per-entry)))
 

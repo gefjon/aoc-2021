@@ -4,7 +4,9 @@
 
    #:if-let #:format
 
-   #:Iterator #:next #:reduce #:unwrapped #:empty-iterator #:for-each #:range #:upto #:iterator-sum #:every? #:any?
+   #:Iterator #:next #:reduce #:unwrapped #:empty-iterator #:for-each #:iterator-sum #:every? #:any?
+   #:range #:range-inclusive #:upto
+   #:find-min #:find-max #:count #:iterator-length
 
    #:InputFile #:open-read #:close-read #:read-line #:lines #:eof?
    #:call-with-input-file #:with-input-file
@@ -12,12 +14,26 @@
    #:flatten #:unwrap #:expect #:debug
 
    #:strlen #:string-empty? #:substring #:leading-substring? #:without-leading-substring #:split-string
+
    #:parse-int-with-base
-   #:bitfield-extract #:bitfield-insert #:bit-set? #:plus? #:minus? #:sign #:bitwise-invert
-   #:vector-apply-at #:vector-iterator #:collect-to-vector
-   #:Matrix #:make-matrix #:matrix-index-unsafe #:matrix-index #:matrix-write!-unsafe #:matrix-row-iterator #:matrix-col-iterator
-   #:call/ec #:EscapeContinuation #:throw #:let/ec))
+
+   #:bitfield-extract #:bitfield-insert #:bit-set? #:zero? #:plus? #:minus? #:sign #:bitwise-invert
+
+   #:vector-apply-at #:vector-iterator #:collect-to-vector #:collect-to-list
+
+   #:Matrix #:make-matrix
+   #:matrix-rows #:matrix-columns
+   #:matrix-index-unsafe #:matrix-index #:matrix-write!-unsafe #:matrix-update!-unsafe
+   #:matrix-row-iterator #:matrix-col-iterator
+   
+   #:call/ec #:EscapeContinuation #:throw #:let/ec
+
+   #:uncurry))
 (cl:in-package :aoc-2021/prelude)
+
+(cl:declaim (cl:optimize (cl:speed 3)
+                         (cl:debug 1) ; gimme those tail calls!
+                         (cl:safety 2)))
 
 (cl:defun nullable-to-optional (thing)
   (cl:if thing
@@ -110,6 +126,17 @@
                      None
                      (Some (cell-swap (+ step old) state))))))))
 
+  (declare range-inclusive (Integer -> Integer -> (Iterator Integer)))
+  (define (range-inclusive start end)
+    (let ((step (if (> start end) -1 1))
+          (finished? (if (> start end) < >))
+          (state (make-cell start)))
+      (iterator
+       (fn (_) (let ((old (cell-read state)))
+                 (if (finished? old end)
+                     None
+                     (Some (cell-swap (+ step old) state))))))))
+
   (declare upto (Integer -> (Iterator Integer)))
   (define (upto end)
     (range 0 end))
@@ -137,6 +164,18 @@
   (declare iterator-sum ((Num :a) => ((Iterator :a) -> :a)))
   (define iterator-sum (reduce + (fromInt 0)))
 
+  (declare iterator-length ((Iterator :a) -> Integer))
+  (define (iterator-length iter)
+    (reduce +
+            0
+            (map (const 1) iter)))
+
+  (declare count ((:a -> Boolean) -> (Iterator :a) -> Integer))
+  (define (count count? iter)
+    (reduce +
+            0
+            (map (fn (item) (if (count? item) 1 0)) iter)))
+
   (declare for-each ((:item -> :a) -> (Iterator :item) -> Unit))
   (define (for-each func iter)
     (reduce (fn (_) (compose (const Unit) func)) Unit iter))
@@ -147,8 +186,27 @@
       ((None) True)
       ((Some item) (and (pred item) (every? pred iter)))))
 
+  (declare any? ((:item -> Boolean) -> (Iterator :item) -> Boolean))
   (define (any? pred iter)
-    (not (every? (compose not pred) iter))))
+    (not (every? (compose not pred) iter)))
+
+  (declare find-min ((Ord :num) => ((Iterator :num) -> (Optional :num))))
+  (define (find-min iter)
+    (match (next iter)
+      ((Some first)
+       (Some (reduce min first iter)))
+      ((None) None)))
+
+  (declare find-max ((Ord :num) => ((Iterator :num) -> (Optional :num))))
+  (define (find-max iter)
+    (match (next iter)
+      ((Some first)
+       (Some (reduce max first iter)))
+      ((None) None)))
+
+  (declare collect-to-list ((Iterator :item) -> (List :item)))
+  (define (collect-to-list iter)
+    (reverse (reduce (flip Cons) Nil iter))))
 
 (coalton-toplevel
   (define-type InputFile
@@ -291,6 +349,10 @@
   (define (bit-set? index int)
     (== 1 (bitfield-extract 1 index int)))
 
+  (declare zero? (Integer -> Boolean))
+  (define zero?
+    (== 0))
+  
   (declare plus? (Integer -> Boolean))
   (define (plus? int)
     (> int 0))
@@ -309,8 +371,8 @@
       (cl:lognot int))))
 
 (coalton-toplevel
-  (declare vector-apply-at ((:a -> :a) -> Integer -> (Vector :a) -> (Vector :a)))
-  (define (vector-apply-at func index vector)
+  (declare vector-apply-at ((:a -> :a) -> (Vector :a) -> Integer -> (Vector :a)))
+  (define (vector-apply-at func vector index)
     "It's a destructive operator, but it still returns the vector for purposes of `reduce'-ing"
     (if-let ((Some old) (vector-index index vector))
       (progn (vector-set index (func old) vector) vector)
@@ -380,6 +442,13 @@
                              (cl:setf (cl:aref arr row col) new-val))))
            mat))
 
+  (declare matrix-update!-unsafe ((:a -> :a) -> (Matrix :a) -> Integer -> Integer -> (Matrix :a)))
+  (define (matrix-update!-unsafe func mat row col)
+    (matrix-write!-unsafe mat
+                          (func (matrix-index-unsafe mat row col))
+                          row
+                          col))
+
   (declare matrix-row-iterator ((Matrix :a) -> Integer -> (Iterator :a)))
   (define (matrix-row-iterator mat row)
     (progn (unless (matrix-row-inbounds mat row)
@@ -415,3 +484,9 @@
 
 (cl:defmacro let/ec (ec cl:&body (body))
   `(call/ec (fn (,ec) ,body)))
+
+(coalton-toplevel
+  (declare uncurry ((:a -> :b -> :c) -> (Tuple :a :b) -> :c))
+  (define (uncurry func tupl)
+    (match tupl
+      ((Tuple a b) (func a b)))))
