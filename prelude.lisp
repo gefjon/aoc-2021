@@ -5,7 +5,7 @@
    #:if-let #:format
 
    #:Iterator #:next #:reduce #:unwrapped #:empty-iterator #:for-each #:iterator-sum #:every? #:any?
-   #:range #:range-inclusive #:upto
+   #:range #:range-inclusive #:upto #:enumerate #:count-forever
    #:find-min #:find-max #:count #:iterator-length
 
    #:InputFile #:open-read #:close-read #:read-line #:lines #:eof?
@@ -19,7 +19,9 @@
 
    #:bitfield-extract #:bitfield-insert #:bit-set? #:zero? #:plus? #:minus? #:sign #:bitwise-invert
 
-   #:vector-apply-at #:vector-iterator #:collect-to-vector #:collect-to-list
+   #:vector-apply-at #:vector-iterator #:collect-to-vector #:vector-median #:vector-average
+
+   #:collect-to-list
 
    #:Matrix #:make-matrix
    #:matrix-rows #:matrix-columns
@@ -28,7 +30,9 @@
    
    #:call/ec #:EscapeContinuation #:throw #:let/ec
 
-   #:uncurry))
+   #:uncurry
+
+   #:floor))
 (cl:in-package :aoc-2021/prelude)
 
 (cl:declaim (cl:optimize (cl:speed 3)
@@ -61,6 +65,12 @@
        (cl:format cl:t ,template ,@vars)
        Unit)))
 
+(coalton-toplevel
+  (declare floor (Integer -> Integer -> Integer))
+  (define (floor numerator denominator)
+    (lisp Integer (numerator denominator)
+      (cl:values (cl:floor numerator denominator)))))
+
 ;;;; iterator
 ;;; type definition
 (coalton-toplevel
@@ -80,6 +90,17 @@
                 (if-let ((Tuple (Some l) (Some r)) (Tuple (next left) (next right)))
                   (Some (Tuple l r))
                   None))))
+
+  (declare count-forever (Unit -> (Iterator Integer)))
+  (define (count-forever _)
+    (let ((next (make-cell 0)))
+      (Iterator (fn (_)
+                  (progn (let old = (cell-read next))
+                         (cell-update (+ 1) next)
+                         (Some old))))))
+
+  (declare enumerate ((Iterator :a) -> (Iterator (Tuple Integer :a))))
+  (define (enumerate iter) (zip (count-forever) iter))
 
   (declare filter ((:a -> Boolean) -> (Iterator :a) -> (Iterator :a)))
   (define (filter keep? iter)
@@ -190,18 +211,22 @@
   (define (any? pred iter)
     (not (every? (compose not pred) iter)))
 
-  (declare find-min ((Ord :num) => ((Iterator :num) -> (Optional :num))))
-  (define (find-min iter)
+  (declare find-min ((Ord :num) => ((:item -> :num) -> (Iterator :item) -> (Optional :item))))
+  (define (find-min key iter)
     (match (next iter)
       ((Some first)
-       (Some (reduce min first iter)))
+       (Some (reduce (fn (left right)
+                       (if (< (key left) (key right)) left right))
+                     first iter)))
       ((None) None)))
 
-  (declare find-max ((Ord :num) => ((Iterator :num) -> (Optional :num))))
-  (define (find-max iter)
+  (declare find-max ((Ord :num) => ((:item -> :num) -> (Iterator :item) -> (Optional :item))))
+  (define (find-max key iter)
     (match (next iter)
       ((Some first)
-       (Some (reduce max first iter)))
+       (Some (reduce (fn (left right)
+                       (if (> (key left) (key right)) left right))
+                     first iter)))
       ((None) None)))
 
   (declare collect-to-list ((Iterator :item) -> (List :item)))
@@ -389,7 +414,19 @@
       (let vec = (make-vector Unit))
       (for-each (fn (item) (vector-push item vec))
                          iter)
-      vec)))
+      vec))
+
+  (declare vector-median ((Vector :a) -> (Optional :a)))
+  (define (vector-median vec)
+    (match (vector-length vec)
+      (0 None)
+      (len (Some (vector-index-unsafe (floor len 2) vec)))))
+
+  (declare vector-average ((Vector Integer) -> Integer))
+  (define (vector-average vec)
+    (match (vector-length vec)
+      (0 0)
+      (len (floor (iterator-sum (vector-iterator vec)) len)))))
 
 (coalton-toplevel
   (define-type (Matrix :a)

@@ -41,8 +41,8 @@
   (declare alloc-map ((Vector Line) -> (Matrix Integer)))
   (define (alloc-map lines)
     (progn
-      (let max-x = (unwrap (find-max (map line-max-x (vector-iterator lines)))))
-      (let max-y = (unwrap (find-max (map line-max-y (vector-iterator lines)))))
+      (let max-x = (unwrap (find-max id (map line-max-x (vector-iterator lines)))))
+      (let max-y = (unwrap (find-max id (map line-max-y (vector-iterator lines)))))
       (make-matrix (+ 1 max-x) (+ 1 max-y) 0)))
 
   (declare horiz? (Line -> Boolean))
